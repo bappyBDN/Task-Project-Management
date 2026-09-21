@@ -63,7 +63,12 @@ origins = [
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://localhost:3000",
+        "https://task-project-management-ten.vercel.app",
+    ],
+    allow_origin_regex=r"https://.*\.vercel\.app",  # যেকোনো .vercel.app ডোমেইন এলাউ করবে
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
