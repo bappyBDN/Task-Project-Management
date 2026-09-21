@@ -7,7 +7,7 @@ class Settings(BaseSettings):
 
     app_name: str = "Anwar Group Enterprise Task & Project Management System"
     database_url: str = "sqlite:///./anwar_task_manager.db"
-    cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
+    cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173,https://frontend-i1v2z5ovs-abc-8e17.vercel.app"
     frontend_url: str = "http://localhost:5173"
 
     # ---------------------------------------------------------------- Email (Gmail SMTP)
