@@ -35,13 +35,34 @@ const EMPTY = {
   planned_start_date: '',
   baseline_due_date: '',
   status: '',
+  progress_pct: 0,
+  blocker: false,
 }
 
 const DEFAULT_PRIORITIES = ['low', 'medium', 'high', 'critical']
 
+// Turn whatever the API threw into a readable sentence (FastAPI sends {"detail": "..."} or,
+// for validation errors, {"detail": [{loc, msg}, ...]}).
+function errText(e: any): string {
+  const raw = e?.message ?? String(e)
+  try {
+    const j = JSON.parse(raw)
+    const d = j?.detail ?? j
+    if (typeof d === 'string') return d
+    if (Array.isArray(d)) return d.map((x: any) => `${(x.loc || []).slice(1).join('.')}: ${x.msg}`).join('; ')
+  } catch { /* not JSON */ }
+  return raw || 'Could not save the task'
+}
+
+// null -> '' so <input>/<textarea> stay controlled when editing an existing task
+const initialForm = (task?: Task) =>
+  task
+    ? Object.fromEntries(Object.entries({ ...EMPTY, ...task }).map(([k, v]) => [k, v ?? '']))
+    : { ...EMPTY }
+
 export default function TaskForm({ projects, users, companies = [], functions = [], departments = [], onClose, onSaved, onRefresh, task }: Props) {
   const { user } = useAuth()
-  const [form, setForm] = useState<any>(task ? { ...task } : EMPTY)
+  const [form, setForm] = useState<any>(() => initialForm(task))
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
 
@@ -67,6 +88,27 @@ export default function TaskForm({ projects, users, companies = [], functions = 
 
   const set = (k: string, v: any) => setForm((f: any) => ({ ...f, [k]: v }))
   const str = (v: any) => (v === null || v === undefined ? '' : String(v))
+
+  // --- Hierarchy-aware RACI defaulting ---------------------------------
+  // Picking Responsible auto-fills Accountable with that person's immediate
+  // senior (User.reports_to_id) — the normal RACI rule: the manager is
+  // accountable for what their report does. Admins can still freely
+  // override the suggestion; this only ever pre-fills an EMPTY field, it
+  // never forces or locks the value.
+  const managerIdOf = (userId: string) => {
+    const u = users.find((x) => String(x.id) === userId)
+    return u?.reports_to_id != null ? String(u.reports_to_id) : ''
+  }
+
+  const onResponsibleChange = (v: string) => {
+    set('responsible_id', v)
+    if (!form.accountable_id) {
+      const managerId = managerIdOf(v)
+      if (managerId) set('accountable_id', managerId)
+      // If the person has no manager on file (e.g. the CEO, or hierarchy
+      // not set up yet), Accountable is left for the admin to pick manually.
+    }
+  }
 
   const addOption = async (kind: string, value: string) => {
     await api.post(`/list-options?kind=${kind}&value=${encodeURIComponent(value)}`)
@@ -96,11 +138,20 @@ export default function TaskForm({ projects, users, companies = [], functions = 
 
   const submit = async () => {
     if (!form.title?.trim()) { setError('Task title is mandatory'); return }
+    if (!form.baseline_due_date) { setError('Baseline due date is mandatory'); return }
+    if (form.planned_start_date && form.planned_start_date > form.baseline_due_date) {
+      setError('Planned start cannot be after the baseline due date'); return
+    }
+    const progress = Math.max(0, Math.min(100, Number(form.progress_pct) || 0))
+    const status = form.status || 'backlog'
+    // Keep an approved (revised) due date when editing; only follow the baseline if they were the same.
+    const t: any = task // `types.ts` may not declare approved_due_date
+    const keepApproved = t?.approved_due_date && t.approved_due_date !== t.baseline_due_date
     setSaving(true)
     setError('')
     const payload: any = {
       code: form.code || null,
-      title: form.title,
+      title: form.title.trim(),
       description: form.description,
       expected_deliverable: form.expected_deliverable,
       category: form.category || 'operational',
@@ -115,9 +166,9 @@ export default function TaskForm({ projects, users, companies = [], functions = 
       reviewer_id: form.reviewer_id ? Number(form.reviewer_id) : null,
       planned_start_date: form.planned_start_date || null,
       baseline_due_date: form.baseline_due_date || null,
-      approved_due_date: form.baseline_due_date || null,
-      progress_pct: form.progress_pct ?? 0,
-      status: form.status || 'backlog',
+      approved_due_date: keepApproved ? t.approved_due_date : form.baseline_due_date,
+      progress_pct: status === 'completed' || status === 'closed' ? 100 : progress,
+      status,
       blocker: form.blocker ?? false,
       blocker_details: form.blocker_details,
       acceptance_criteria: form.acceptance_criteria,
@@ -127,7 +178,7 @@ export default function TaskForm({ projects, users, companies = [], functions = 
       else await api.post('/tasks', payload)
       onSaved()
     } catch (e: any) {
-      setError(e.message)
+      setError(errText(e))
     } finally {
       setSaving(false)
     }
@@ -146,6 +197,10 @@ export default function TaskForm({ projects, users, companies = [], functions = 
   }
   const createdUser = async (u: User) => {
     set('responsible_id', String(u.id))
+    if (!form.accountable_id) {
+      const managerId = u.reports_to_id != null ? String(u.reports_to_id) : ''
+      if (managerId) set('accountable_id', managerId)
+    }
     setShowUserModal(false)
     onRefresh?.() // refresh parent lists WITHOUT closing the task form
   }
@@ -315,7 +370,7 @@ export default function TaskForm({ projects, users, companies = [], functions = 
             <SearchableSelect
               value={str(form.responsible_id)}
               items={userItems}
-              onChange={(v) => set('responsible_id', v)}
+              onChange={onResponsibleChange}
               placeholder="Search user…"
               onAddNew={() => setShowUserModal(true)}
               addLabel="new user"
@@ -333,6 +388,9 @@ export default function TaskForm({ projects, users, companies = [], functions = 
               addLabel="new user"
               onRemove={user?.role === 'admin' ? (v) => removeUser(v) : undefined}
             />
+            {form.responsible_id && form.accountable_id && form.accountable_id === managerIdOf(str(form.responsible_id)) && (
+              <div className="small muted" style={{ marginTop: 4 }}>Auto-suggested: Responsible's immediate senior. Change it anytime.</div>
+            )}
           </div>
           <div>
             <label>Reviewer</label>

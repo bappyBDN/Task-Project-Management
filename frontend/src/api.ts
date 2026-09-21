@@ -3,7 +3,9 @@
 import { store } from './store'
 import type { User } from './types'
 
-const MODE: 'local' | 'remote' = (import.meta as any).env?.VITE_STORAGE_MODE || 'local'
+//const MODE: 'local' | 'remote' = (import.meta as any).env?.VITE_STORAGE_MODE || 'local'
+// ✅ নতুন (ডিফল্ট remote)
+const MODE: 'local' | 'remote' = (import.meta as any).env?.VITE_STORAGE_MODE || 'remote'
 const BASE = '/api'
 
 let currentUserId: number | null = null
@@ -17,12 +19,35 @@ export function getCurrentUserId(): number | null {
 
 async function remote<T>(path: string, options?: RequestInit): Promise<T> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-  if (currentUserId !== null) headers['X-User-Id'] = String(currentUserId)
-  const res = await fetch(`${BASE}${path}`, { headers, ...options })
-  if (!res.ok) {
-    const body = await res.text()
-    throw new Error(`${res.status} ${res.statusText}: ${body}`)
+  
+  // --- নতুন JWT Auth লজিক ---
+  const token = localStorage.getItem('token')
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`
   }
+
+  // পুরোনো X-User-Id রাখা হয়েছে ব্যাকওয়ার্ড কম্প্যাটিবিলিটির জন্য
+  if (currentUserId !== null) headers['X-User-Id'] = String(currentUserId)
+  
+  const res = await fetch(`${BASE}${path}`, { headers, ...options })
+  
+  if (!res.ok) {
+    // --- 401 Unauthorized হলে অটো লগআউট ---
+    if (res.status === 401) {
+      localStorage.removeItem('token')
+      localStorage.removeItem('user')
+      window.location.href = '/' // লগিন পেজে রিডাইরেক্ট
+    }
+
+    const bodyText = await res.text()
+    try {
+      const bodyJson = JSON.parse(bodyText)
+      throw new Error(bodyJson.detail || `${res.status} ${res.statusText}`)
+    } catch {
+      throw new Error(`${res.status} ${res.statusText}: ${bodyText}`)
+    }
+  }
+  
   if (res.status === 204) return undefined as T
   return res.json() as Promise<T>
 }

@@ -1,4 +1,4 @@
-import { NavLink, Route, Routes } from 'react-router-dom'
+import { NavLink, Route, Routes, useLocation } from 'react-router-dom'
 import { useAuth } from './auth'
 import { STORAGE_MODE } from './api'
 import { store } from './store'
@@ -15,6 +15,8 @@ import Raci from './pages/Raci'
 import Kanban from './pages/Kanban'
 import Notifications from './pages/Notifications'
 import AdminPanel from './pages/AdminPanel'
+import ForgotPassword from './pages/ForgotPassword'
+import ResetPassword from './pages/ResetPassword'
 import { label } from './constants'
 
 interface NavItem { to: string; label: string; icon: string }
@@ -51,15 +53,24 @@ function buildSections(isAdmin: boolean): NavSection[] {
 
 export default function App() {
   const { user, loading, logout } = useAuth()
+  const location = useLocation()
 
   if (loading) {
-    return <div style={{ display: 'flex', minHeight: '100vh', alignItems: 'center', justifyContent: 'center' }}>Loading…</div>
+    return (
+      <div style={{ display: 'flex', minHeight: '100vh', alignItems: 'center', justifyContent: 'center' }}>
+        Loading…
+      </div>
+    )
   }
 
-  if (!user) {
-    return <Login />
-  }
+  // ---- PUBLIC routes: always standalone, no sidebar, no auth required ----
+  if (location.pathname === '/forgot-password') return <ForgotPassword />
+  if (location.pathname === '/reset-password') return <ResetPassword />
 
+  // ---- Not logged in → show Login ----
+  if (!user) return <Login />
+
+  // ---- Logged in → main layout ----
   const isAdmin = user.role === 'admin'
   const sections = buildSections(isAdmin)
 
@@ -75,8 +86,12 @@ export default function App() {
             <div key={s.section}>
               <div className="section">{s.section}</div>
               {s.items.map((i) => (
-                <NavLink key={i.to} to={i.to} end={i.to === '/'}
-                  className={({ isActive }) => (isActive ? 'active' : '')}>
+                <NavLink
+                  key={i.to}
+                  to={i.to}
+                  end={i.to === '/'}
+                  className={({ isActive }) => (isActive ? 'active' : '')}
+                >
                   <span>{i.icon}</span>
                   <span>{i.label}</span>
                 </NavLink>
@@ -87,9 +102,17 @@ export default function App() {
         <div style={{ padding: '14px 18px', borderTop: '1px solid rgba(255,255,255,0.08)' }}>
           <div className="small" style={{ fontWeight: 600 }}>{user.name}</div>
           <div className="small" style={{ color: 'var(--gold)', fontSize: 11 }}>{label(user.role)}</div>
-          <div className="small" style={{ color: '#7e8aa0', fontSize: 10, marginTop: 4 }}>{STORAGE_MODE === 'local' ? 'Data stored in browser (localStorage)' : 'Connected to database'}</div>
+          <div className="small" style={{ color: '#7e8aa0', fontSize: 10, marginTop: 4 }}>
+            {STORAGE_MODE === 'local' ? 'Data stored in browser (localStorage)' : 'Connected to database'}
+          </div>
           <button className="btn sm" style={{ marginTop: 8, width: '100%' }} onClick={logout}>Sign Out</button>
-          <button className="btn sm" style={{ marginTop: 4, width: '100%', color: 'var(--red)' }} onClick={() => { if (confirm('Reset all data to defaults?')) { store.reset(); location.reload() } }}>Reset Data</button>
+          <button
+            className="btn sm"
+            style={{ marginTop: 4, width: '100%', color: 'var(--red)' }}
+            onClick={() => { if (confirm('Reset all data to defaults?')) { store.reset(); location.reload() } }}
+          >
+            Reset Data
+          </button>
         </div>
       </aside>
       <main className="main">

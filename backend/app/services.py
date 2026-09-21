@@ -1,4 +1,5 @@
 """Shared helpers: audit logging, notifications, health calculation."""
+import re
 from datetime import date
 from typing import Optional
 
@@ -69,9 +70,37 @@ def recalc_task_health(db: Session, task: models.Task):
 
 
 def next_code(prefix: str, db: Session, model) -> str:
-    """Generate the next sequential business id like PRJ-0001."""
-    count = db.query(model).count()
-    return f"{prefix}-{count + 1:04d}"
+    """Generate the next sequential business id like PRJ-0001.
+
+    Uses the highest existing number + 1 — NOT the row count. Counting rows breaks
+    as soon as any record is hard-deleted (count drops, the generated code already
+    exists, and every insert fails with UNIQUE constraint on `code`).
+    """
+    pattern = re.compile(rf"^{re.escape(prefix)}-(\d+)$")
+    highest = 0
+    for (code,) in db.query(model.code).filter(model.code.like(f"{prefix}-%")).all():
+        m = pattern.match(code or "")
+        if m:
+            highest = max(highest, int(m.group(1)))
+    return f"{prefix}-{highest + 1:04d}"
+
+
+DONE_STATUSES = ("completed", "closed")
+
+
+def apply_completion_rules(task: models.Task):
+    """Keep completion data consistent with status.
+
+    completed / closed -> progress 100 % and `actual_due_date` (used as "Completed on"
+    in the completion email) stamped with today if not already set.
+    Any other status  -> a previously stamped completion date is cleared (task re-opened).
+    """
+    if task.status in DONE_STATUSES:
+        task.progress_pct = 100.0
+        if task.actual_due_date is None:
+            task.actual_due_date = date.today()
+    elif task.actual_due_date is not None and task.status != "cancelled":
+        task.actual_due_date = None
 
 
 def scan_escalations(db: Session) -> list[dict]:

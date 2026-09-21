@@ -3,6 +3,7 @@ from datetime import date, datetime
 from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, EmailStr
 
 
 # ---------------------------------------------------------------- Organization
@@ -27,6 +28,16 @@ class FunctionOut(FunctionBase):
     id: int
 
 
+class DepartmentBase(BaseModel):
+    name: str
+    function_id: Optional[int] = None
+
+
+class DepartmentOut(DepartmentBase):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+
+
 class UserBase(BaseModel):
     employee_id: str
     name: str
@@ -36,11 +47,30 @@ class UserBase(BaseModel):
     function_id: Optional[int] = None
     department_id: Optional[int] = None
     role: str = "employee"
+    reports_to_id: Optional[int] = None
 
 
 class UserOut(UserBase):
     model_config = ConfigDict(from_attributes=True)
     id: int
+
+
+class UserMappingOut(BaseModel):
+    """One row of the simple User Mapping master-data table.
+    Flat by design — each row shows only the immediate manager (reports_to_name).
+    Because reports_to_id chains user-to-user, the full top-to-bottom hierarchy
+    can always be derived later (e.g. a tree/org-chart view) without changing
+    this table — that's the extension point for the future."""
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    employee_id: str
+    name: str
+    email: str
+    designation: Optional[str] = None
+    role: str
+    reports_to_id: Optional[int] = None
+    reports_to_name: Optional[str] = None
+    is_active: bool
 
 
 # ---------------------------------------------------------------- Project
@@ -70,6 +100,33 @@ class ProjectBase(BaseModel):
     criticality: str = "medium"
 
 
+class ProjectUpdate(BaseModel):
+    """PATCH payload: every field optional."""
+    code: Optional[str] = None
+    name: Optional[str] = None
+    company_id: Optional[int] = None
+    function_id: Optional[int] = None
+    program_id: Optional[int] = None
+    sponsor_id: Optional[int] = None
+    manager_id: Optional[int] = None
+    owner_id: Optional[int] = None
+    strategic_objective: Optional[str] = None
+    objective: Optional[str] = None
+    expected_outcome: Optional[str] = None
+    project_type: Optional[str] = None
+    priority: Optional[str] = None
+    methodology: Optional[str] = None
+    start_date: Optional[date] = None
+    baseline_due_date: Optional[date] = None
+    approved_due_date: Optional[date] = None
+    forecast_due_date: Optional[date] = None
+    completion_pct: Optional[float] = None
+    status: Optional[str] = None
+    health: Optional[str] = None
+    budget: Optional[float] = None
+    criticality: Optional[str] = None
+
+
 class ProjectOut(ProjectBase):
     model_config = ConfigDict(from_attributes=True)
     id: int
@@ -96,6 +153,7 @@ class TaskBase(BaseModel):
     milestone_id: Optional[int] = None
     company_id: Optional[int] = None
     function_id: Optional[int] = None
+    department_id: Optional[int] = None
     title: str
     description: Optional[str] = None
     expected_deliverable: Optional[str] = None
@@ -113,6 +171,38 @@ class TaskBase(BaseModel):
     status: str = "backlog"
     health: str = "green"
     blocker: bool = False
+    blocker_details: Optional[str] = None
+    acceptance_criteria: Optional[str] = None
+    completion_evidence: Optional[str] = None
+    completion_remarks: Optional[str] = None
+
+
+class TaskUpdate(BaseModel):
+    """PATCH payload: every field optional, so a partial update (e.g. only `status`) is valid."""
+    code: Optional[str] = None
+    parent_id: Optional[int] = None
+    project_id: Optional[int] = None
+    milestone_id: Optional[int] = None
+    company_id: Optional[int] = None
+    function_id: Optional[int] = None
+    department_id: Optional[int] = None
+    title: Optional[str] = None
+    description: Optional[str] = None
+    expected_deliverable: Optional[str] = None
+    category: Optional[str] = None
+    task_type: Optional[str] = None
+    priority: Optional[str] = None
+    responsible_id: Optional[int] = None
+    accountable_id: Optional[int] = None
+    reviewer_id: Optional[int] = None
+    planned_start_date: Optional[date] = None
+    baseline_due_date: Optional[date] = None
+    approved_due_date: Optional[date] = None
+    forecast_due_date: Optional[date] = None
+    progress_pct: Optional[float] = None
+    status: Optional[str] = None
+    health: Optional[str] = None
+    blocker: Optional[bool] = None
     blocker_details: Optional[str] = None
     acceptance_criteria: Optional[str] = None
     completion_evidence: Optional[str] = None
@@ -335,3 +425,20 @@ class ProjectKpiOut(BaseModel):
     red: int
     black: int
     forecast_miss: int
+
+#---------------------------------------Login------------------------
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+    user: dict

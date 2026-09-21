@@ -27,7 +27,7 @@ export interface User {
   function_id?: number
   department_id?: number
   role: string
-  reports_to?: number
+  reports_to_id?: number | null
   is_active: boolean
 }
 

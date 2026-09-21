@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app import models, schemas, services
@@ -6,6 +7,10 @@ from app.auth import get_admin_user
 from app.database import get_db
 
 router = APIRouter(prefix="/projects", tags=["projects"])
+
+# NOT NULL columns: an explicit `null` from the client must not overwrite them.
+_NOT_NULL_FIELDS = {"name", "project_type", "priority", "methodology", "completion_pct",
+                    "status", "health", "criticality"}
 
 
 @router.get("", response_model=list[schemas.ProjectOut])
@@ -30,13 +35,29 @@ def list_projects(
 
 @router.post("", response_model=schemas.ProjectOut, status_code=201)
 def create_project(payload: schemas.ProjectBase, db: Session = Depends(get_db)):
-    code = payload.code or services.next_code("PRJ", db, models.Project)
-    project = models.Project(**{**payload.model_dump(), "code": code})
-    db.add(project)
-    db.commit()
-    db.refresh(project)
+    data = payload.model_dump()
+    data["name"] = (data.get("name") or "").strip()
+    if not data["name"]:
+        raise HTTPException(400, "Project name is required")
+    user_code = (data.get("code") or "").strip() or None
+    if user_code and db.query(models.Project).filter(models.Project.code == user_code).first():
+        raise HTTPException(409, f"Project code {user_code} already exists")
+
+    project = None
+    for attempt in range(3):
+        data["code"] = user_code or services.next_code("PRJ", db, models.Project)
+        project = models.Project(**data)
+        db.add(project)
+        try:
+            db.flush()
+            break
+        except IntegrityError:
+            db.rollback()
+            if user_code or attempt == 2:
+                raise HTTPException(409, "Could not save the project (duplicate code). Please try again.")
     services.audit(db, "system", "project", project.id, "created", new_value=project.name)
     db.commit()
+    db.refresh(project)
     return project
 
 
@@ -49,11 +70,17 @@ def get_project(project_id: int, db: Session = Depends(get_db)):
 
 
 @router.patch("/{project_id}", response_model=schemas.ProjectOut)
-def update_project(project_id: int, payload: schemas.ProjectBase, db: Session = Depends(get_db)):
+def update_project(project_id: int, payload: schemas.ProjectUpdate, db: Session = Depends(get_db)):
     project = db.get(models.Project, project_id)
     if not project:
         raise HTTPException(404, "Project not found")
-    data = payload.model_dump(exclude_unset=True)
+    data = {k: v for k, v in payload.model_dump(exclude_unset=True).items()
+            if not (v is None and k in _NOT_NULL_FIELDS)}
+    new_code = (data.pop("code", None) or "").strip()
+    if new_code and new_code != project.code:
+        if db.query(models.Project).filter(models.Project.code == new_code, models.Project.id != project.id).first():
+            raise HTTPException(409, f"Project code {new_code} already exists")
+        data["code"] = new_code
     for k, v in data.items():
         setattr(project, k, v)
     services.audit(db, "system", "project", project.id, "updated", new_value=project.name)
@@ -83,13 +110,20 @@ def delete_project(project_id: int, admin: models.User = Depends(get_admin_user)
     if not project:
         raise HTTPException(404, "Project not found")
     name = project.name
-    # Soft-delete tasks so history is preserved
-    tasks = db.query(models.Task).filter(models.Task.project_id == project_id).all()
-    for t in tasks:
-        t.is_deleted = True
+    milestone_ids = [m for (m,) in db.query(models.Milestone.id).filter(models.Milestone.project_id == project_id).all()]
+
+    # Soft-delete tasks so history is preserved, but detach them from the rows we are about to remove
+    # (otherwise databases that enforce foreign keys refuse the delete).
+    db.query(models.Task).filter(models.Task.project_id == project_id).update(
+        {"is_deleted": True, "project_id": None}, synchronize_session=False)
+    if milestone_ids:
+        db.query(models.Task).filter(models.Task.milestone_id.in_(milestone_ids)).update(
+            {"milestone_id": None}, synchronize_session=False)
+        db.query(models.BacklogItem).filter(models.BacklogItem.target_milestone_id.in_(milestone_ids)).update(
+            {"target_milestone_id": None}, synchronize_session=False)
     db.query(models.Milestone).filter(models.Milestone.project_id == project_id).delete(synchronize_session=False)
-    db.query(models.BacklogItem).filter(models.BacklogItem.project_id == project_id).update(
-        {"project_id": None}, synchronize_session=False)
+    for model in (models.BacklogItem, models.Risk, models.Issue, models.Decision):
+        db.query(model).filter(model.project_id == project_id).update({"project_id": None}, synchronize_session=False)
     db.query(models.RaciEntry).filter(models.RaciEntry.project_id == project_id).delete(synchronize_session=False)
     services.audit(db, admin.name, "project", project_id, "deleted", previous_value=name,
                    reason=f"Deleted by admin {admin.name}")

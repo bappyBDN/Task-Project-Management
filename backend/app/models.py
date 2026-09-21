@@ -1,4 +1,5 @@
 """Core database entities for the Anwar Group Enterprise Task & Project Management System."""
+
 from datetime import datetime, date
 from typing import Optional
 
@@ -54,6 +55,18 @@ class User(Base, TimestampMixin):
     department_id: Mapped[Optional[int]] = mapped_column(ForeignKey("departments.id"), nullable=True)
     role: Mapped[str] = mapped_column(String(32), default="employee")  # group_executive, business_head, functional_head, sponsor, pmo, pm, team_lead, employee, reviewer, auditor, admin
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    # --- নতুন ফিল্ডগুলো যোগ করুন ---
+    hashed_password: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    reset_token: Mapped[Optional[str]] = mapped_column(String(128), unique=True, index=True, nullable=True)
+    reset_token_expires: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    # --- User Mapping (organizational reporting line) ---
+    # Self-referencing: whoever this points to is this user's manager.
+    # Because it's self-referencing, this ONE column already supports every
+    # level of the hierarchy (employee -> team lead -> manager -> ... -> CEO)
+    # with no extra tables — future levels just chain through more rows.
+    reports_to_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
 
 
 # ---------------------------------------------------------------- Program/Project
@@ -126,6 +139,7 @@ class Task(Base, TimestampMixin):
     milestone_id: Mapped[Optional[int]] = mapped_column(ForeignKey("milestones.id"), nullable=True)
     company_id: Mapped[Optional[int]] = mapped_column(ForeignKey("companies.id"), nullable=True)
     function_id: Mapped[Optional[int]] = mapped_column(ForeignKey("functions.id"), nullable=True)
+    department_id: Mapped[Optional[int]] = mapped_column(ForeignKey("departments.id"), nullable=True)
     title: Mapped[str] = mapped_column(String(240), index=True)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     expected_deliverable: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -321,3 +335,20 @@ class AuditLog(Base):
     new_value: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     happened_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+# ---------------------------------------------------------------- Email automation
+class EmailLog(Base):
+    """Tracks which automated emails have already gone out, so the scheduler
+    never sends the same notification twice on the same day."""
+    __tablename__ = "email_logs"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    entity_type: Mapped[str] = mapped_column(String(32))  # task / backlog
+    entity_id: Mapped[int] = mapped_column(Integer, index=True)
+    email_type: Mapped[str] = mapped_column(String(40))   # completed / overdue / due_0 / due_1 ... / stale
+    sent_date: Mapped[date] = mapped_column(Date, default=date.today)
+    recipients: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("entity_type", "entity_id", "email_type", "sent_date", name="uq_email_once_per_day"),
+    )

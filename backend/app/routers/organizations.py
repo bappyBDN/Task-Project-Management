@@ -1,6 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+import secrets
+from datetime import datetime, timedelta
+
+from app import email_service
+from app.config import settings
 from app import models, schemas, services
 from app.auth import get_admin_user, get_current_user
 from app.database import get_db
@@ -47,11 +52,34 @@ def me(user: models.User = Depends(get_current_user)):
 
 
 @router.post("/users", response_model=schemas.UserOut, status_code=201)
-def create_user(payload: schemas.UserBase, admin: models.User = Depends(get_admin_user), db: Session = Depends(get_db)):
+def create_user(
+    payload: schemas.UserBase,
+    admin: models.User = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+):
     user = models.User(**payload.model_dump())
     db.add(user)
     db.commit()
     db.refresh(user)
+
+    # New accounts start with no password. Generate a 24-hour "set password" link
+    # and email it, reusing the same /reset-password page as Forgot Password.
+    if not user.hashed_password:
+        token = secrets.token_urlsafe(32)
+        user.reset_token = token
+        user.reset_token_expires = datetime.utcnow() + timedelta(hours=24)
+        db.commit()
+
+        set_link = f"{settings.frontend_url}/reset-password?token={token}"
+        email_service.send_welcome_set_password_email(
+            user_name=user.name,
+            to_email=user.email,
+            set_link=set_link,
+            expires_hours=24,
+        )
+        # Dev fallback — also print in the terminal for quick testing.
+        print(f"[dev] Set-password link for {user.email}: {set_link}")
+
     return user
 
 
@@ -105,4 +133,31 @@ def permanent_delete_user(user_id: int, admin: models.User = Depends(get_admin_u
     db.query(models.Notification).filter(models.Notification.user_id == user_id).delete(synchronize_session=False)
 
     db.delete(user)
+    db.commit()
+
+
+#     "add new department" call gets a 404 — there was no route to hit. ---
+
+@router.get("/departments", response_model=list[schemas.DepartmentOut])
+def list_departments(db: Session = Depends(get_db)):
+    return db.query(models.Department).order_by(models.Department.name).all()
+
+
+@router.post("/departments", response_model=schemas.DepartmentOut, status_code=201)
+def create_department(payload: schemas.DepartmentBase, db: Session = Depends(get_db)):
+    dep = models.Department(**payload.model_dump())
+    db.add(dep)
+    db.commit()
+    db.refresh(dep)
+    return dep
+
+
+@router.delete("/departments/{department_id}", status_code=204)
+def delete_department(department_id: int, db: Session = Depends(get_db)):
+    dep = db.get(models.Department, department_id)
+    if not dep:
+        return  # already gone — deleting twice shouldn't error
+    db.query(models.User).filter(models.User.department_id == department_id).update(
+        {"department_id": None}, synchronize_session=False)  # don't orphan FK references
+    db.delete(dep)
     db.commit()
