@@ -3,10 +3,15 @@
 import { store } from './store'
 import type { User } from './types'
 
-//const MODE: 'local' | 'remote' = (import.meta as any).env?.VITE_STORAGE_MODE || 'local'
 // ✅ নতুন (ডিফল্ট remote)
 const MODE: 'local' | 'remote' = (import.meta as any).env?.VITE_STORAGE_MODE || 'remote'
-const BASE = '/api'
+
+// ✅ পরিবর্তন: Vercel/Localhost-এর এনভায়রনমেন্ট ভ্যারিয়েবল থেকে Render URL নেওয়া হচ্ছে
+// fallback হিসেবে http://localhost:8000 দেওয়া আছে (আপনার ব্যাকএন্ডের পোর্ট অনুযায়ী পরিবর্তন করে নিতে পারেন)
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+
+// যদি remote হয়, তাহলে API_URL ব্যবহার করবে, না হলে শুধু '/api'
+const BASE = MODE === 'remote' ? `${API_URL}/api` : '/api'
 
 let currentUserId: number | null = null
 
@@ -26,7 +31,7 @@ async function remote<T>(path: string, options?: RequestInit): Promise<T> {
     headers['Authorization'] = `Bearer ${token}`
   }
 
-  // পুরোনো X-User-Id রাখা হয়েছে ব্যাকওয়ার্ড কম্প্যাটিবিলিটির জন্য
+  // পুরোনো X-User-Id রাখা হয়েছে ব্যাকওয়ার্ড কম্প্যাটিবিলিটির জন্য
   if (currentUserId !== null) headers['X-User-Id'] = String(currentUserId)
   
   const res = await fetch(`${BASE}${path}`, { headers, ...options })
